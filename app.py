@@ -1,4 +1,6 @@
 from flask import Flask, request, jsonify
+from werkzeug.utils import secure_filename
+import os
 from flask_sqlalchemy import SQLAlchemy
 import jwt
 import datetime
@@ -17,6 +19,7 @@ class User(db.Model):
     password = db.Column(db.String(100), nullable=False)
     bio = db.Column(db.String(500), nullable=True)
     profile_image = db.Column(db.String(200), nullable=True)
+    
 
     location = db.relationship('Location', backref='user', uselist=False)
     education = db.relationship('Education', backref='user')
@@ -326,6 +329,40 @@ def get_messages(user_id):
     return jsonify({'sent_messages': sent_messages_data, 'received_messages': received_messages_data}), 200
 
 # Endpoint to send a message Ends Here
+
+# Define upload directory# Define upload directory
+UPLOAD_FOLDER = 'uploads/profile_images'
+app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
+
+# Function to get user ID (this is just a placeholder, replace with your actual implementation)
+def get_user_id_somehow():
+    # For demonstration purposes, let's assume the user ID is submitted in the request form
+    user_id = request.form.get('user_id')  
+    return user_id
+
+# Route to handle profile image uploads
+@app.route('/upload_profile_image', methods=['POST'])
+def upload_profile_image():
+    if 'file' not in request.files:
+        return jsonify({'error': 'No file part'}), 400
+
+    file = request.files['file']
+    if file.filename == '':
+        return jsonify({'error': 'No selected file'}), 400
+
+    if file:
+        filename = secure_filename(file.filename)
+        file.save(os.path.join(app.config['UPLOAD_FOLDER'], filename))
+        # Save the image path to the database
+        user_id = get_user_id_somehow()  # Call the function to get the user ID
+        user = User.query.get(user_id)
+        user.profile_image = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+        db.session.commit()
+        return jsonify({'message': 'Profile image uploaded successfully'}), 200
+    else:
+        return jsonify({'error': 'Upload failed'}), 500
+    
+     # Image upolad function ends here
 
 
 if __name__ == '__main__':
