@@ -5,12 +5,15 @@ from flask_sqlalchemy import SQLAlchemy
 from flask_admin.contrib.sqla import ModelView
 import jwt
 import datetime
+from flask_cors import CORS
 
 
 app = Flask(__name__)
+CORS(app)
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///database.db'
 app.config['SECRET_KEY'] = '8Zn9Ql0gTvRqW3EzDX4uKX0nPjVqRnGp'
 app.config['UPLOAD_FOLDER'] = 'uploads/profile_images'
+
 
 db = SQLAlchemy(app)
 
