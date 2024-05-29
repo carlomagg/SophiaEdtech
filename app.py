@@ -2,14 +2,22 @@ from flask import Flask, request, jsonify
 from werkzeug.utils import secure_filename
 import os
 from flask_sqlalchemy import SQLAlchemy
+from flask_admin.contrib.sqla import ModelView
 import jwt
 import datetime
+
 
 app = Flask(__name__)
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///database.db'
 app.config['SECRET_KEY'] = '8Zn9Ql0gTvRqW3EzDX4uKX0nPjVqRnGp'
+app.config['UPLOAD_FOLDER'] = 'uploads/profile_images'
 
 db = SQLAlchemy(app)
+
+
+
+
+
 
 # User model
 class User(db.Model):
@@ -19,15 +27,17 @@ class User(db.Model):
     password = db.Column(db.String(100), nullable=False)
     bio = db.Column(db.String(500), nullable=True)
     profile_image = db.Column(db.String(200), nullable=True)
-    
 
     location = db.relationship('Location', backref='user', uselist=False)
     education = db.relationship('Education', backref='user')
     work_experience = db.relationship('WorkExperience', backref='user')
     licenses_certifications = db.relationship('LicenseCertification', backref='user')
+    enrolled_courses = db.relationship('Course', secondary=lambda: enrollment_table, lazy='subquery', backref=db.backref('enrolled_users', lazy='dynamic'))
 
     def __repr__(self):
         return f'<User {self.email}>'
+
+
 
 # Location model
 class Location(db.Model):
@@ -74,6 +84,298 @@ class Message(db.Model):
     recipient_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
     timestamp = db.Column(db.DateTime, nullable=False, default=datetime.datetime.utcnow)
     content = db.Column(db.Text, nullable=False)
+
+    # BlogPost model
+class BlogPost(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    title = db.Column(db.String(200), nullable=False)
+    image = db.Column(db.String(200), nullable=True)
+    category = db.Column(db.String(100), nullable=False)
+    time_read = db.Column(db.Integer, nullable=False)  # in minutes
+    date = db.Column(db.Date, nullable=False, default=datetime.date.today())
+    content = db.Column(db.Text, nullable=False)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+
+    def __repr__(self):
+        return f'<BlogPost {self.title}>'
+
+
+# Course model
+class Course(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    title = db.Column(db.String(200), nullable=False)
+    image = db.Column(db.String(200), nullable=True)
+    content = db.Column(db.Text, nullable=False)
+    video = db.Column(db.String(200), nullable=True)
+    author_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    author = db.relationship('User', backref=db.backref('courses', lazy='dynamic'))
+    date_created = db.Column(db.DateTime, nullable=False, default=datetime.datetime.utcnow)
+    categories = db.relationship('CourseCategory', backref='course', lazy='dynamic')
+    modules = db.relationship('Module', backref='course', lazy='dynamic')
+
+# Module model
+class Module(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(100), nullable=False)
+    course_id = db.Column(db.Integer, db.ForeignKey('course.id'), nullable=False)
+
+# CourseCategory model
+class CourseCategory(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(100), nullable=False)
+    course_id = db.Column(db.Integer, db.ForeignKey('course.id'), nullable=False)
+
+# Enrollment model
+enrollment_table = db.Table('enrollment',
+    db.Column('user_id', db.Integer, db.ForeignKey('user.id'), primary_key=True),
+    db.Column('course_id', db.Integer, db.ForeignKey('course.id'), primary_key=True)
+)
+
+
+ 
+# Course endpoints
+@app.route('/courses', methods=['POST'])
+def create_course():
+    token = request.headers.get('Authorization')
+    if not token:
+        return jsonify({'error': 'Token is missing'}), 401
+
+    try:
+        data = jwt.decode(token.split()[1], app.config['SECRET_KEY'], algorithms=['HS256'])
+        author_id = data['user_id']
+    except:
+        return jsonify({'error': 'Invalid token'}), 401
+
+    data = request.get_json()
+    title = data.get('title')
+    image = data.get('image')
+    content = data.get('content')
+    video = data.get('video')
+    category_names = data.get('categories', [])
+    module_names = data.get('modules', [])
+
+    if not title or not content:
+        return jsonify({'error': 'Title and content are required'}), 400
+
+    course = Course(title=title, image=image, content=content, video=video, author_id=author_id)
+
+    for category_name in category_names:
+        category = CourseCategory(name=category_name)
+        course.categories.append(category)
+
+    for module_name in module_names:
+        module = Module(name=module_name)
+        course.modules.append(module)
+
+    db.session.add(course)
+    db.session.commit()
+
+    return jsonify({'message': 'Course created successfully'}), 201
+   
+
+   # Get all courses
+@app.route('/courses', methods=['GET'])
+def get_courses():
+    courses = Course.query.all()
+    courses_data = [{'id': course.id, 'title': course.title, 'image': course.image, 'content': course.content,
+                     'video': course.video, 'author': course.author.full_name, 'date_created': course.date_created,
+                     'categories': [category.name for category in course.categories],
+                     'modules': [module.name for module in course.modules]} for course in courses]
+    return jsonify(courses_data), 200
+
+# Get a specific course
+@app.route('/courses/<int:course_id>', methods=['GET'])
+def get_course(course_id):
+    course = Course.query.get(course_id)
+    if not course:
+        return jsonify({'error': 'Course not found'}), 404
+
+    course_data = {'id': course.id, 'title': course.title, 'image': course.image, 'content': course.content,
+                   'video': course.video, 'author': course.author.full_name, 'date_created': course.date_created,
+                   'categories': [category.name for category in course.categories],
+                   'modules': [module.name for module in course.modules]}
+    return jsonify(course_data), 200
+
+# Update a course
+@app.route('/courses/<int:course_id>', methods=['PUT'])
+def update_course(course_id):
+
+
+# Delete a course
+ @app.route('/courses/<int:course_id>', methods=['DELETE'])
+ def delete_course(course_id):
+    course = Course.query.get(course_id)
+    if not course:
+        return jsonify({'error': 'Course not found'}), 404
+
+    db.session.delete(course)
+    db.session.commit()
+
+    return jsonify({'message': 'Course deleted successfully'}), 200
+ 
+  # Create a new category
+  # Create a new category
+@app.route('/categories', methods=['POST'])
+def create_category():
+    data = request.get_json()
+    name = data.get('name')
+
+    if not name:
+        return jsonify({'error': 'Category name is required'}), 400
+
+    category = CourseCategory(name=name)
+    db.session.add(category)
+    db.session.commit()
+
+    return jsonify({'message': 'Category created successfully'}), 201
+
+# Get all categories
+@app.route('/categories', methods=['GET'])
+def get_categories():
+    categories = CourseCategory.query.all()
+    categories_data = [{'id': category.id, 'name': category.name} for category in categories]
+    return jsonify(categories_data), 200
+
+# Update a category
+@app.route('/categories/<int:category_id>', methods=['PUT'])
+def update_category(category_id):
+    category = CourseCategory.query.get(category_id)
+    if not category:
+        return jsonify({'error': 'Category not found'}), 404
+
+    data = request.get_json()
+    name = data.get('name', category.name)
+
+    category.name = name
+    db.session.commit()
+
+    return jsonify({'message': 'Category updated successfully'}), 200
+
+# Delete a category
+@app.route('/categories/<int:category_id>', methods=['DELETE'])
+def delete_category(category_id):
+    category = CourseCategory.query.get(category_id)
+    if not category:
+        return jsonify({'error': 'Category not found'}), 404
+
+    db.session.delete(category)
+    db.session.commit()
+
+    return jsonify({'message': 'Category deleted successfully'}), 200
+
+
+# Create a new module
+@app.route('/modules', methods=['POST'])
+def create_module():
+    data = request.get_json()
+    name = data.get('name')
+    course_id = data.get('course_id')
+
+    if not name or not course_id:
+        return jsonify({'error': 'Module name and course ID are required'}), 400
+
+    module = Module(name=name, course_id=course_id)
+    db.session.add(module)
+    db.session.commit()
+
+    return jsonify({'message': 'Module created successfully'}), 201
+
+# Get all modules
+@app.route('/modules', methods=['GET'])
+def get_modules():
+    modules = Module.query.all()
+    modules_data = [{'id': module.id, 'name': module.name, 'course_id': module.course_id} for module in modules]
+    return jsonify(modules_data), 200
+
+# Update a module
+@app.route('/modules/<int:module_id>', methods=['PUT'])
+def update_module(module_id):
+    module = Module.query.get(module_id)
+    if not module:
+        return jsonify({'error': 'Module not found'}), 404
+
+    data = request.get_json()
+    name = data.get('name', module.name)
+    course_id = data.get('course_id', module.course_id)
+
+    module.name = name
+    module.course_id = course_id
+    db.session.commit()
+
+    return jsonify({'message': 'Module updated successfully'}), 200
+
+# Delete a module
+@app.route('/modules/<int:module_id>', methods=['DELETE'])
+def delete_module(module_id):
+    module = Module.query.get(module_id)
+    if not module:
+        return jsonify({'error': 'Module not found'}), 404
+
+    db.session.delete(module)
+    db.session.commit()
+
+    return jsonify({'message': 'Module deleted successfully'}), 200
+
+
+    # Enroll in a course
+@app.route('/courses/<int:course_id>/enroll', methods=['POST'])
+def enroll_in_course(course_id):
+    token = request.headers.get('Authorization')
+    if not token:
+        return jsonify({'error': 'Token is missing'}), 401
+
+    try:
+        data = jwt.decode(token.split()[1], app.config['SECRET_KEY'], algorithms=['HS256'])
+        user_id = data['user_id']
+    except:
+        return jsonify({'error': 'Invalid token'}), 401
+
+    course = Course.query.get(course_id)
+    if not course:
+        return jsonify({'error': 'Course not found'}), 404
+
+    user = User.query.get(user_id)
+    if not user:
+        return jsonify({'error': 'User not found'}), 404
+
+    # Add the course to the user's enrolled courses (you might need to create a new table or relationship for this)
+    user.enrolled_courses.append(course)
+    db.session.commit()
+
+    return jsonify({'message': 'Enrolled in the course successfully'}), 200
+
+
+    # Define upload directory for course videos
+COURSE_VIDEO_UPLOAD_FOLDER = 'uploads/course_videos'
+app.config['COURSE_VIDEO_UPLOAD_FOLDER'] = COURSE_VIDEO_UPLOAD_FOLDER
+
+# Route to handle course video uploads
+@app.route('/upload_course_video/<int:course_id>', methods=['POST'])
+def upload_course_video(course_id):
+    course = Course.query.get(course_id)
+    if not course:
+        return jsonify({'error': 'Course not found'}), 404
+
+    if 'file' not in request.files:
+        return jsonify({'error': 'No file part'}), 400
+
+    file = request.files['file']
+    if file.filename == '':
+        return jsonify({'error': 'No selected file'}), 400
+
+    if file:
+        filename = secure_filename(file.filename)
+        file.save(os.path.join(app.config['COURSE_VIDEO_UPLOAD_FOLDER'], filename))
+        course.video = os.path.join(app.config['COURSE_VIDEO_UPLOAD_FOLDER'], filename)
+        db.session.commit()
+        return jsonify({'message': 'Course video uploaded successfully'}), 200
+    else:
+        return jsonify({'error': 'Upload failed'}), 500
+
+
+
+     
+
 
 # Register endpoint
 @app.route('/register', methods=['POST'])
@@ -278,6 +580,10 @@ def profile():
 # Profile code ends here
 
 
+
+
+
+
 # Endpoint to send a message
 @app.route('/send_message', methods=['POST'])
 def send_message():
@@ -365,7 +671,66 @@ def upload_profile_image():
      # Image upolad function ends here
 
 
+# Endpoint for Creating Blog Posts
+
+    @app.route('/create_blog_post', methods=['POST'])
+    def create_blog_post():
+        token = request.headers.get('Authorization')
+        if not token:
+            return jsonify({'error': 'Token is missing'}), 401
+
+    try:
+        data = jwt.decode(token.split()[1], app.config['SECRET_KEY'], algorithms=['HS256'])
+        author_id = data['user_id']
+    except:
+        return jsonify({'error': 'Invalid token'}), 401
+
+    data = request.get_json()
+    title = data.get('title')
+    image = data.get('image')
+    category = data.get('category')
+    time_read = data.get('time_read')
+
+    if not title or not category or not time_read:
+        return jsonify({'error': 'Title, category, and time read are required'}), 400
+
+    blog_post = BlogPost(title=title, image=image, category=category, time_read=time_read, author_id=author_id)
+    db.session.add(blog_post)
+    db.session.commit()
+
+    return jsonify({'message': 'Blog post created successfully'}), 201
+
+
+
+
+
+    # Endpoint for Retrieving Blog Posts
+    @app.route('/blog_posts', methods=['GET'])
+    def get_blog_posts():
+        blog_posts = BlogPost.query.all()
+    blog_posts_data = [{
+        'id': post.id,
+        'title': post.title,
+        'image': post.image,
+        'category': post.category,
+        'time_read': post.time_read,
+        'date': post.date.isoformat(),
+        'author': post.author.full_name if post.author else None
+    } for post in blog_posts]
+
+    return jsonify(blog_posts_data), 200
+
+  
+
+
+
+
+
+
 if __name__ == '__main__':
     with app.app_context():
         db.create_all()
     app.run(debug=True)
+
+
+
