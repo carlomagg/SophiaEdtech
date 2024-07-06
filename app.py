@@ -13,6 +13,8 @@ CORS(app)
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///database.db'
 app.config['SECRET_KEY'] = '8Zn9Ql0gTvRqW3EzDX4uKX0nPjVqRnGp'
 app.config['UPLOAD_FOLDER'] = 'uploads/profile_images'
+app.config['PEER_REVIEW_UPLOAD_FOLDER'] = 'uploads/peer_reviews'
+os.makedirs(app.config['PEER_REVIEW_UPLOAD_FOLDER'], exist_ok=True)
 
 
 db = SQLAlchemy(app)
@@ -39,6 +41,26 @@ class User(db.Model):
 
     def __repr__(self):
         return f'<User {self.email}>'
+
+
+# Admin model
+class Admin(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    username = db.Column(db.String(100), unique=True, nullable=False)
+    password = db.Column(db.String(100), nullable=False)
+
+# Role model
+class Role(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(50), unique=True, nullable=False)
+
+# Instructor model
+class Instructor(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(100), nullable=False)
+    course = db.Column(db.String(200), nullable=False)
+    email = db.Column(db.String(100), nullable=False)
+    phone_number = db.Column(db.String(20), nullable=True)  # Adjust as needed
 
 
 
@@ -133,6 +155,30 @@ enrollment_table = db.Table('enrollment',
     db.Column('user_id', db.Integer, db.ForeignKey('user.id'), primary_key=True),
     db.Column('course_id', db.Integer, db.ForeignKey('course.id'), primary_key=True)
 )
+
+
+# for roles
+
+# Define a many-to-many relationship between User and Role
+roles_users = db.Table('roles_users',
+    db.Column('user_id', db.Integer, db.ForeignKey('user.id'), primary_key=True),
+    db.Column('role_id', db.Integer, db.ForeignKey('role.id'), primary_key=True)
+)
+
+class User(db.Model):
+    # Existing fields...
+    roles = db.relationship('Role', secondary=roles_users, backref=db.backref('users', lazy='dynamic'))
+
+
+
+class PeerReview(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    reviewer_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    course_id = db.Column(db.Integer, db.ForeignKey('course.id'), nullable=False)
+    file_path = db.Column(db.String(200), nullable=False)
+    feedback = db.Column(db.Text, nullable=True)
+    timestamp = db.Column(db.DateTime, nullable=False, default=datetime.datetime.utcnow)
 
 
  
@@ -724,6 +770,186 @@ def upload_profile_image():
     return jsonify(blog_posts_data), 200
 
   
+# upload Endpoint for peer
+@app.route('/upload_peer_review', methods=['POST'])
+def upload_peer_review():
+    token = request.headers.get('Authorization')
+    if not token:
+        return jsonify({'error': 'Token is missing'}), 401
+
+    try:
+        data = jwt.decode(token.split()[1], app.config['SECRET_KEY'], algorithms=['HS256'])
+        user_id = data['user_id']
+    except:
+        return jsonify({'error': 'Invalid token'}), 401
+
+    user = User.query.get(user_id)
+    if not user:
+        return jsonify({'error': 'User not found'}), 404
+
+    course_id = request.form.get('course_id')
+    reviewer_id = request.form.get('reviewer_id')
+    feedback = request.form.get('feedback')
+
+    if not course_id or not reviewer_id:
+        return jsonify({'error': 'Course ID and Reviewer ID are required'}), 400
+
+    if 'file' not in request.files:
+        return jsonify({'error': 'No file part in the request'}), 400
+
+    file = request.files['file']
+    if file.filename == '':
+        return jsonify({'error': 'No file selected for uploading'}), 400
+
+    if file:
+        filename = secure_filename(file.filename)
+        file_path = os.path.join(app.config['PEER_REVIEW_UPLOAD_FOLDER'], filename)
+        file.save(file_path)
+
+        peer_review = PeerReview(
+            user_id=user_id,
+            reviewer_id=reviewer_id,
+            course_id=course_id,
+            file_path=file_path,
+            feedback=feedback
+        )
+        db.session.add(peer_review)
+        db.session.commit()
+
+        return jsonify({'message': 'Peer review uploaded successfully', 'file_path': file_path}), 201
+
+    return jsonify({'error': 'File upload failed'}), 500
+
+
+    #  Endpoint for peer
+
+    @app.route('/peer_reviews/<int:course_id>', methods=['GET'])
+    def view_peer_reviews(course_id):
+     token = request.headers.get('Authorization')
+    if not token:
+        return jsonify({'error': 'Token is missing'}), 401
+
+    try:
+        data = jwt.decode(token.split()[1], app.config['SECRET_KEY'], algorithms=['HS256'])
+        user_id = data['user_id']
+    except:
+        return jsonify({'error': 'Invalid token'}), 401
+
+    peer_reviews = PeerReview.query.filter_by(course_id=course_id).all()
+    if not peer_reviews:
+        return jsonify({'error': 'No peer reviews found for this course'}), 404
+
+    review_data = []
+    for review in peer_reviews:
+        review_data.append({
+            'id': review.id,
+            'user_id': review.user_id,
+            'reviewer_id': review.reviewer_id,
+            'course_id': review.course_id,
+            'file_path': review.file_path,
+            'feedback': review.feedback,
+            'timestamp': review.timestamp
+        })
+
+    return jsonify(review_data), 200
+
+
+# admin login
+@app.route('/admin/login', methods=['POST'])
+def admin_login():
+    data = request.get_json()
+    username = data.get('username')
+    password = data.get('password')
+
+    admin = Admin.query.filter_by(username=username).first()
+
+    if not admin or admin.password != password:
+        return jsonify({'error': 'Invalid credentials'}), 401
+
+    token = jwt.encode({
+        'admin_id': admin.id,
+        'exp': datetime.datetime.utcnow() + datetime.timedelta(hours=24)
+    }, app.config['SECRET_KEY'])
+
+    return jsonify({'token': token}), 200
+
+
+
+# create role
+
+@app.route('/admin/roles', methods=['POST'])
+def create_role():
+    data = request.get_json()
+    name = data.get('name')
+
+    if not name:
+        return jsonify({'error': 'Role name is required'}), 400
+
+    role = Role(name=name)
+    db.session.add(role)
+    db.session.commit()
+
+    return jsonify({'message': 'Role created successfully'}), 201
+
+#Get all roles
+@app.route('/admin/roles', methods=['GET'])
+def get_roles():
+    roles = Role.query.all()
+    roles_data = [{'id': role.id, 'name': role.name} for role in roles]
+    return jsonify(roles_data), 200
+
+
+# create instructor
+
+@app.route('/admin/instructors', methods=['POST'])
+def create_instructor():
+    data = request.get_json()
+    name = data.get('name')
+    course = data.get('course')
+    email = data.get('email')
+    phone_number = data.get('phone_number')
+
+    if not name or not course or not email:
+        return jsonify({'error': 'Name, course, and email are required'}), 400
+
+    instructor = Instructor(name=name, course=course, email=email, phone_number=phone_number)
+    db.session.add(instructor)
+    db.session.commit()
+
+    return jsonify({'message': 'Instructor created successfully'}), 201
+
+
+#get all instructor
+
+@app.route('/admin/instructors', methods=['GET'])
+def get_instructors():
+    instructors = Instructor.query.all()
+    instructors_data = [{'id': instructor.id, 'name': instructor.name, 'course': instructor.course,
+                         'email': instructor.email, 'phone_number': instructor.phone_number} for instructor in instructors]
+    return jsonify(instructors_data), 200
+
+
+#assign role
+    @app.route('/admin/assign_role', methods=['POST'])
+    def assign_role():
+     data = request.get_json()
+    user_id = data.get('user_id')
+    role_id = data.get('role_id')
+
+    user = User.query.get(user_id)
+    if not user:
+        return jsonify({'error': 'User not found'}), 404
+
+    role = Role.query.get(role_id)
+    if not role:
+        return jsonify({'error': 'Role not found'}), 404
+
+    user.roles.append(role)
+    db.session.commit()
+
+    return jsonify({'message': 'Role assigned successfully'}), 200
+
+
 
 
 
@@ -734,6 +960,4 @@ if __name__ == '__main__':
     with app.app_context():
         db.create_all()
     app.run(debug=True)
-
-
 
