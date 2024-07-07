@@ -1,5 +1,6 @@
 from flask import Flask, request, jsonify
 from werkzeug.utils import secure_filename
+from functools import wraps
 import os
 from flask_sqlalchemy import SQLAlchemy
 from flask_admin.contrib.sqla import ModelView
@@ -23,8 +24,12 @@ db = SQLAlchemy(app)
 
 
 
-
 # User model
+roles_users = db.Table('roles_users',
+    db.Column('user_id', db.Integer, db.ForeignKey('user.id'), primary_key=True),
+    db.Column('role_id', db.Integer, db.ForeignKey('role.id'), primary_key=True)
+)
+
 class User(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     full_name = db.Column(db.String(100), nullable=False)
@@ -38,29 +43,13 @@ class User(db.Model):
     work_experience = db.relationship('WorkExperience', backref='user')
     licenses_certifications = db.relationship('LicenseCertification', backref='user')
     enrolled_courses = db.relationship('Course', secondary=lambda: enrollment_table, lazy='subquery', backref=db.backref('enrolled_users', lazy='dynamic'))
+    roles = db.relationship('Role', secondary=roles_users, backref=db.backref('users', lazy='dynamic'))
 
     def __repr__(self):
         return f'<User {self.email}>'
 
 
-# Admin model
-class Admin(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    username = db.Column(db.String(100), unique=True, nullable=False)
-    password = db.Column(db.String(100), nullable=False)
 
-# Role model
-class Role(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    name = db.Column(db.String(50), unique=True, nullable=False)
-
-# Instructor model
-class Instructor(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    name = db.Column(db.String(100), nullable=False)
-    course = db.Column(db.String(200), nullable=False)
-    email = db.Column(db.String(100), nullable=False)
-    phone_number = db.Column(db.String(20), nullable=True)  # Adjust as needed
 
 
 
@@ -102,27 +91,8 @@ class LicenseCertification(db.Model):
     credentials_id = db.Column(db.String(100), nullable=True)
     credential_url = db.Column(db.String(200), nullable=True)
 
-    # Message model
-class Message(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    sender_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
-    recipient_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
-    timestamp = db.Column(db.DateTime, nullable=False, default=datetime.datetime.utcnow)
-    content = db.Column(db.Text, nullable=False)
-
-    # BlogPost model
-class BlogPost(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    title = db.Column(db.String(200), nullable=False)
-    image = db.Column(db.String(200), nullable=True)
-    category = db.Column(db.String(100), nullable=False)
-    time_read = db.Column(db.Integer, nullable=False)  # in minutes
-    date = db.Column(db.Date, nullable=False, default=datetime.date.today())
-    content = db.Column(db.Text, nullable=False)
-    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
-
-    def __repr__(self):
-        return f'<BlogPost {self.title}>'
+    
+ 
 
 
 # Course model
@@ -155,30 +125,6 @@ enrollment_table = db.Table('enrollment',
     db.Column('user_id', db.Integer, db.ForeignKey('user.id'), primary_key=True),
     db.Column('course_id', db.Integer, db.ForeignKey('course.id'), primary_key=True)
 )
-
-
-# for roles
-
-# Define a many-to-many relationship between User and Role
-roles_users = db.Table('roles_users',
-    db.Column('user_id', db.Integer, db.ForeignKey('user.id'), primary_key=True),
-    db.Column('role_id', db.Integer, db.ForeignKey('role.id'), primary_key=True)
-)
-
-class User(db.Model):
-    # Existing fields...
-    roles = db.relationship('Role', secondary=roles_users, backref=db.backref('users', lazy='dynamic'))
-
-
-
-class PeerReview(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
-    reviewer_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
-    course_id = db.Column(db.Integer, db.ForeignKey('course.id'), nullable=False)
-    file_path = db.Column(db.String(200), nullable=False)
-    feedback = db.Column(db.Text, nullable=True)
-    timestamp = db.Column(db.DateTime, nullable=False, default=datetime.datetime.utcnow)
 
 
  
@@ -262,7 +208,7 @@ def update_course(course_id):
 
     return jsonify({'message': 'Course deleted successfully'}), 200
  
-  # Create a new category
+  
   # Create a new category
 @app.route('/categories', methods=['POST'])
 def create_category():
@@ -420,10 +366,7 @@ def upload_course_video(course_id):
         return jsonify({'message': 'Course video uploaded successfully'}), 200
     else:
         return jsonify({'error': 'Upload failed'}), 500
-
-
-
-     
+    
 
 
 # Register endpoint
@@ -630,61 +573,6 @@ def profile():
 
 
 
-
-
-
-# Endpoint to send a message
-@app.route('/send_message', methods=['POST'])
-def send_message():
-    token = request.headers.get('Authorization')
-    if not token:
-        return jsonify({'error': 'Token is missing'}), 401
-
-    try:
-        data = jwt.decode(token.split()[1], app.config['SECRET_KEY'], algorithms=['HS256'])
-        sender_id = data['user_id']
-    except:
-        return jsonify({'error': 'Invalid token'}), 401
-
-    data = request.get_json()
-    recipient_id = data.get('recipient_id')
-    content = data.get('content')
-
-    if not recipient_id or not content:
-        return jsonify({'error': 'Recipient ID and message content are required'}), 400
-
-    message = Message(sender_id=sender_id, recipient_id=recipient_id, content=content)
-    db.session.add(message)
-    db.session.commit()
-
-    return jsonify({'message': 'Message sent successfully'}), 201
-
-# Endpoint to get messages for a user
-@app.route('/get_messages/<int:user_id>', methods=['GET'])
-def get_messages(user_id):
-    token = request.headers.get('Authorization')
-    if not token:
-        return jsonify({'error': 'Token is missing'}), 401
-
-    try:
-        data = jwt.decode(token.split()[1], app.config['SECRET_KEY'], algorithms=['HS256'])
-        requesting_user_id = data['user_id']
-    except:
-        return jsonify({'error': 'Invalid token'}), 401
-
-    if requesting_user_id != user_id:
-        return jsonify({'error': 'Unauthorized'}), 403
-
-    messages_sent = Message.query.filter_by(sender_id=user_id).all()
-    messages_received = Message.query.filter_by(recipient_id=user_id).all()
-
-    sent_messages_data = [{'sender_id': msg.sender_id, 'timestamp': msg.timestamp, 'content': msg.content} for msg in messages_sent]
-    received_messages_data = [{'sender_id': msg.sender_id, 'timestamp': msg.timestamp, 'content': msg.content} for msg in messages_received]
-
-    return jsonify({'sent_messages': sent_messages_data, 'received_messages': received_messages_data}), 200
-
-# Endpoint to send a message Ends Here
-
 # Define upload directory# Define upload directory
 UPLOAD_FOLDER = 'uploads/profile_images'
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
@@ -720,13 +608,24 @@ def upload_profile_image():
      # Image upolad function ends here
 
 
-# Endpoint for Creating Blog Posts
+  # Blog starts here
+  # Blog model
+class Blog(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    title = db.Column(db.String(200), nullable=False)
+    featured_image = db.Column(db.String(200), nullable=True)
+    content = db.Column(db.Text, nullable=False)
+    category = db.Column(db.String(100), nullable=True)
+    author_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    author = db.relationship('User', backref=db.backref('blogs', lazy='dynamic'))
+    date_created = db.Column(db.DateTime, nullable=False, default=datetime.datetime.utcnow)
 
-    @app.route('/create_blog_post', methods=['POST'])
-    def create_blog_post():
-        token = request.headers.get('Authorization')
-        if not token:
-            return jsonify({'error': 'Token is missing'}), 401
+# Create a new blog post
+@app.route('/blogs', methods=['POST'])
+def create_blog():
+    token = request.headers.get('Authorization')
+    if not token:
+        return jsonify({'error': 'Token is missing'}), 401
 
     try:
         data = jwt.decode(token.split()[1], app.config['SECRET_KEY'], algorithms=['HS256'])
@@ -736,43 +635,56 @@ def upload_profile_image():
 
     data = request.get_json()
     title = data.get('title')
-    image = data.get('image')
+    featured_image = data.get('featured_image')
+    content = data.get('content')
     category = data.get('category')
-    time_read = data.get('time_read')
 
-    if not title or not category or not time_read:
-        return jsonify({'error': 'Title, category, and time read are required'}), 400
+    if not title or not content:
+        return jsonify({'error': 'Title and content are required'}), 400
 
-    blog_post = BlogPost(title=title, image=image, category=category, time_read=time_read, author_id=author_id)
-    db.session.add(blog_post)
+    blog = Blog(title=title, featured_image=featured_image, content=content, category=category, author_id=author_id)
+
+    db.session.add(blog)
     db.session.commit()
 
     return jsonify({'message': 'Blog post created successfully'}), 201
 
+# Get all blog posts
+@app.route('/blogs', methods=['GET'])
+def get_blogs():
+    blogs = Blog.query.all()
+    blogs_data = [{
+        'id': blog.id,
+        'title': blog.title,
+        'featured_image': blog.featured_image,
+        'content': blog.content,
+        'category': blog.category,
+        'author': blog.author.full_name,
+        'date_created': blog.date_created
+    } for blog in blogs]
+    return jsonify(blogs_data), 200
 
+# Get a specific blog post
+@app.route('/blogs/<int:blog_id>', methods=['GET'])
+def get_blog(blog_id):
+    blog = Blog.query.get(blog_id)
+    if not blog:
+        return jsonify({'error': 'Blog post not found'}), 404
 
+    blog_data = {
+        'id': blog.id,
+        'title': blog.title,
+        'featured_image': blog.featured_image,
+        'content': blog.content,
+        'category': blog.category,
+        'author': blog.author.full_name,
+        'date_created': blog.date_created
+    }
+    return jsonify(blog_data), 200
 
-
-    # Endpoint for Retrieving Blog Posts
-    @app.route('/blog_posts', methods=['GET'])
-    def get_blog_posts():
-        blog_posts = BlogPost.query.all()
-    blog_posts_data = [{
-        'id': post.id,
-        'title': post.title,
-        'image': post.image,
-        'category': post.category,
-        'time_read': post.time_read,
-        'date': post.date.isoformat(),
-        'author': post.author.full_name if post.author else None
-    } for post in blog_posts]
-
-    return jsonify(blog_posts_data), 200
-
-  
-# upload Endpoint for peer
-@app.route('/upload_peer_review', methods=['POST'])
-def upload_peer_review():
+# Update a blog post
+@app.route('/blogs/<int:blog_id>', methods=['PUT'])
+def update_blog(blog_id):
     token = request.headers.get('Authorization')
     if not token:
         return jsonify({'error': 'Token is missing'}), 401
@@ -783,49 +695,27 @@ def upload_peer_review():
     except:
         return jsonify({'error': 'Invalid token'}), 401
 
-    user = User.query.get(user_id)
-    if not user:
-        return jsonify({'error': 'User not found'}), 404
+    blog = Blog.query.get(blog_id)
+    if not blog:
+        return jsonify({'error': 'Blog post not found'}), 404
 
-    course_id = request.form.get('course_id')
-    reviewer_id = request.form.get('reviewer_id')
-    feedback = request.form.get('feedback')
+    if blog.author_id != user_id:
+        return jsonify({'error': 'Unauthorized to update this blog post'}), 403
 
-    if not course_id or not reviewer_id:
-        return jsonify({'error': 'Course ID and Reviewer ID are required'}), 400
+    data = request.get_json()
+    blog.title = data.get('title', blog.title)
+    blog.featured_image = data.get('featured_image', blog.featured_image)
+    blog.content = data.get('content', blog.content)
+    blog.category = data.get('category', blog.category)
 
-    if 'file' not in request.files:
-        return jsonify({'error': 'No file part in the request'}), 400
+    db.session.commit()
 
-    file = request.files['file']
-    if file.filename == '':
-        return jsonify({'error': 'No file selected for uploading'}), 400
+    return jsonify({'message': 'Blog post updated successfully'}), 200
 
-    if file:
-        filename = secure_filename(file.filename)
-        file_path = os.path.join(app.config['PEER_REVIEW_UPLOAD_FOLDER'], filename)
-        file.save(file_path)
-
-        peer_review = PeerReview(
-            user_id=user_id,
-            reviewer_id=reviewer_id,
-            course_id=course_id,
-            file_path=file_path,
-            feedback=feedback
-        )
-        db.session.add(peer_review)
-        db.session.commit()
-
-        return jsonify({'message': 'Peer review uploaded successfully', 'file_path': file_path}), 201
-
-    return jsonify({'error': 'File upload failed'}), 500
-
-
-    #  Endpoint for peer
-
-    @app.route('/peer_reviews/<int:course_id>', methods=['GET'])
-    def view_peer_reviews(course_id):
-     token = request.headers.get('Authorization')
+# Delete a blog post
+@app.route('/blogs/<int:blog_id>', methods=['DELETE'])
+def delete_blog(blog_id):
+    token = request.headers.get('Authorization')
     if not token:
         return jsonify({'error': 'Token is missing'}), 401
 
@@ -835,31 +725,363 @@ def upload_peer_review():
     except:
         return jsonify({'error': 'Invalid token'}), 401
 
-    peer_reviews = PeerReview.query.filter_by(course_id=course_id).all()
-    if not peer_reviews:
-        return jsonify({'error': 'No peer reviews found for this course'}), 404
+    blog = Blog.query.get(blog_id)
+    if not blog:
+        return jsonify({'error': 'Blog post not found'}), 404
 
-    review_data = []
-    for review in peer_reviews:
-        review_data.append({
-            'id': review.id,
-            'user_id': review.user_id,
-            'reviewer_id': review.reviewer_id,
-            'course_id': review.course_id,
-            'file_path': review.file_path,
-            'feedback': review.feedback,
-            'timestamp': review.timestamp
+    if blog.author_id != user_id:
+        return jsonify({'error': 'Unauthorized to delete this blog post'}), 403
+
+    db.session.delete(blog)
+    db.session.commit()
+
+    return jsonify({'message': 'Blog post deleted successfully'}), 200
+
+    # Blog ends here
+
+    # Message model
+class Message(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    sender_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    recipient_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    content = db.Column(db.Text, nullable=False)
+    timestamp = db.Column(db.DateTime, nullable=False, default=datetime.datetime.utcnow)
+    is_read = db.Column(db.Boolean, default=False)
+
+    sender = db.relationship('User', foreign_keys=[sender_id], backref='sent_messages')
+    recipient = db.relationship('User', foreign_keys=[recipient_id], backref='received_messages')
+
+# Send a message
+@app.route('/messages', methods=['POST'])
+def send_message():
+    token = request.headers.get('Authorization')
+    if not token:
+        return jsonify({'error': 'Token is missing'}), 401
+
+    try:
+        data = jwt.decode(token.split()[1], app.config['SECRET_KEY'], algorithms=['HS256'])
+        sender_id = data['user_id']
+    except:
+        return jsonify({'error': 'Invalid token'}), 401
+
+    data = request.get_json()
+    recipient_id = data.get('recipient_id')
+    content = data.get('content')
+
+    if not recipient_id or not content:
+        return jsonify({'error': 'Recipient ID and content are required'}), 400
+
+    recipient = User.query.get(recipient_id)
+    if not recipient:
+        return jsonify({'error': 'Recipient not found'}), 404
+
+    message = Message(sender_id=sender_id, recipient_id=recipient_id, content=content)
+    db.session.add(message)
+    db.session.commit()
+
+    return jsonify({'message': 'Message sent successfully'}), 201
+
+# Get messages between two users
+@app.route('/messages/<int:other_user_id>', methods=['GET'])
+def get_messages(other_user_id):
+    token = request.headers.get('Authorization')
+    if not token:
+        return jsonify({'error': 'Token is missing'}), 401
+
+    try:
+        data = jwt.decode(token.split()[1], app.config['SECRET_KEY'], algorithms=['HS256'])
+        user_id = data['user_id']
+    except:
+        return jsonify({'error': 'Invalid token'}), 401
+
+    messages = Message.query.filter(
+        ((Message.sender_id == user_id) & (Message.recipient_id == other_user_id)) |
+        ((Message.sender_id == other_user_id) & (Message.recipient_id == user_id))
+    ).order_by(Message.timestamp).all()
+
+    messages_data = [{
+        'id': message.id,
+        'sender_id': message.sender_id,
+        'recipient_id': message.recipient_id,
+        'content': message.content,
+        'timestamp': message.timestamp,
+        'is_read': message.is_read
+    } for message in messages]
+
+    return jsonify(messages_data), 200
+
+# Get all messages for a user
+@app.route('/messages', methods=['GET'])
+def get_all_messages():
+    token = request.headers.get('Authorization')
+    if not token:
+        return jsonify({'error': 'Token is missing'}), 401
+
+    try:
+        data = jwt.decode(token.split()[1], app.config['SECRET_KEY'], algorithms=['HS256'])
+        user_id = data['user_id']
+    except:
+        return jsonify({'error': 'Invalid token'}), 401
+
+    sent_messages = Message.query.filter_by(sender_id=user_id).all()
+    received_messages = Message.query.filter_by(recipient_id=user_id).all()
+
+    messages_data = []
+    for message in sent_messages + received_messages:
+        other_user = message.recipient if message.sender_id == user_id else message.sender
+        messages_data.append({
+            'id': message.id,
+            'other_user_id': other_user.id,
+            'other_user_name': other_user.full_name,
+            'content': message.content,
+            'timestamp': message.timestamp,
+            'is_read': message.is_read,
+            'is_sent': message.sender_id == user_id
         })
 
-    return jsonify(review_data), 200
+    # Sort messages by timestamp
+    messages_data.sort(key=lambda x: x['timestamp'], reverse=True)
+
+    return jsonify(messages_data), 200
+
+# Mark a message as read
+@app.route('/messages/<int:message_id>/read', methods=['PUT'])
+def mark_message_as_read(message_id):
+    token = request.headers.get('Authorization')
+    if not token:
+        return jsonify({'error': 'Token is missing'}), 401
+
+    try:
+        data = jwt.decode(token.split()[1], app.config['SECRET_KEY'], algorithms=['HS256'])
+        user_id = data['user_id']
+    except:
+        return jsonify({'error': 'Invalid token'}), 401
+
+    message = Message.query.get(message_id)
+    if not message:
+        return jsonify({'error': 'Message not found'}), 404
+
+    if message.recipient_id != user_id:
+        return jsonify({'error': 'Unauthorized to mark this message as read'}), 403
+
+    message.is_read = True
+    db.session.commit()
+
+    return jsonify({'message': 'Message marked as read'}), 200
+
+# Delete a message
+
+#peer review
 
 
-# admin login
+# PeerReview model
+class PeerReview(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    course_id = db.Column(db.Integer, db.ForeignKey('course.id'), nullable=False)
+    submitter_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    reviewer_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True)
+    document_path = db.Column(db.String(255), nullable=False)
+    remarks = db.Column(db.Text, nullable=True)
+    submission_date = db.Column(db.DateTime, nullable=False, default=datetime.datetime.utcnow)
+    review_date = db.Column(db.DateTime, nullable=True)
+
+    course = db.relationship('Course', backref='peer_reviews')
+    submitter = db.relationship('User', foreign_keys=[submitter_id], backref='submitted_reviews')
+    reviewer = db.relationship('User', foreign_keys=[reviewer_id], backref='reviewed_reviews')
+
+# Upload a document for peer review
+@app.route('/peer-review/upload', methods=['POST'])
+def upload_peer_review():
+    token = request.headers.get('Authorization')
+    if not token:
+        return jsonify({'error': 'Token is missing'}), 401
+
+    try:
+        data = jwt.decode(token.split()[1], app.config['SECRET_KEY'], algorithms=['HS256'])
+        submitter_id = data['user_id']
+    except:
+        return jsonify({'error': 'Invalid token'}), 401
+
+    if 'file' not in request.files:
+        return jsonify({'error': 'No file part'}), 400
+
+    file = request.files['file']
+    course_id = request.form.get('course_id')
+
+    if file.filename == '':
+        return jsonify({'error': 'No selected file'}), 400
+
+    if file and course_id:
+        filename = secure_filename(file.filename)
+        file_path = os.path.join(app.config['PEER_REVIEW_UPLOAD_FOLDER'], filename)
+        file.save(file_path)
+
+        peer_review = PeerReview(
+            course_id=course_id,
+            submitter_id=submitter_id,
+            document_path=file_path
+        )
+        db.session.add(peer_review)
+        db.session.commit()
+
+        return jsonify({'message': 'Document uploaded successfully for peer review'}), 201
+    else:
+        return jsonify({'error': 'Invalid request'}), 400
+
+# Get documents available for review in a course
+@app.route('/peer-review/available/<int:course_id>', methods=['GET'])
+def get_available_reviews(course_id):
+    token = request.headers.get('Authorization')
+    if not token:
+        return jsonify({'error': 'Token is missing'}), 401
+
+    try:
+        data = jwt.decode(token.split()[1], app.config['SECRET_KEY'], algorithms=['HS256'])
+        user_id = data['user_id']
+    except:
+        return jsonify({'error': 'Invalid token'}), 401
+
+    available_reviews = PeerReview.query.filter_by(
+        course_id=course_id,
+        reviewer_id=None
+    ).filter(PeerReview.submitter_id != user_id).all()
+
+    reviews_data = [{
+        'id': review.id,
+        'submitter_name': review.submitter.full_name,
+        'submission_date': review.submission_date,
+        'document_path': review.document_path
+    } for review in available_reviews]
+
+    return jsonify(reviews_data), 200
+
+# Download a document for review
+@app.route('/peer-review/download/<int:review_id>', methods=['GET'])
+def download_review_document(review_id):
+    token = request.headers.get('Authorization')
+    if not token:
+        return jsonify({'error': 'Token is missing'}), 401
+
+    try:
+        jwt.decode(token.split()[1], app.config['SECRET_KEY'], algorithms=['HS256'])
+    except:
+        return jsonify({'error': 'Invalid token'}), 401
+
+    review = PeerReview.query.get(review_id)
+    if not review:
+        return jsonify({'error': 'Review not found'}), 404
+
+    return send_file(review.document_path, as_attachment=True)
+
+# Submit a review
+@app.route('/peer-review/submit/<int:review_id>', methods=['POST'])
+def submit_review(review_id):
+    token = request.headers.get('Authorization')
+    if not token:
+        return jsonify({'error': 'Token is missing'}), 401
+
+    try:
+        data = jwt.decode(token.split()[1], app.config['SECRET_KEY'], algorithms=['HS256'])
+        reviewer_id = data['user_id']
+    except:
+        return jsonify({'error': 'Invalid token'}), 401
+
+    review = PeerReview.query.get(review_id)
+    if not review:
+        return jsonify({'error': 'Review not found'}), 404
+
+    if review.reviewer_id is not None:
+        return jsonify({'error': 'This document has already been reviewed'}), 400
+
+    data = request.get_json()
+    remarks = data.get('remarks')
+
+    if not remarks:
+        return jsonify({'error': 'Remarks are required'}), 400
+
+    review.reviewer_id = reviewer_id
+    review.remarks = remarks
+    review.review_date = datetime.datetime.utcnow()
+    db.session.commit()
+
+    return jsonify({'message': 'Review submitted successfully'}), 200
+
+# Get reviews for a user's submitted documents
+@app.route('/peer-review/my-submissions', methods=['GET'])
+def get_my_submissions():
+    token = request.headers.get('Authorization')
+    if not token:
+        return jsonify({'error': 'Token is missing'}), 401
+
+    try:
+        data = jwt.decode(token.split()[1], app.config['SECRET_KEY'], algorithms=['HS256'])
+        user_id = data['user_id']
+    except:
+        return jsonify({'error': 'Invalid token'}), 401
+
+    submissions = PeerReview.query.filter_by(submitter_id=user_id).all()
+
+    submissions_data = [{
+        'id': submission.id,
+        'course_name': submission.course.title,
+        'submission_date': submission.submission_date,
+        'reviewer_name': submission.reviewer.full_name if submission.reviewer else None,
+        'review_date': submission.review_date,
+        'remarks': submission.remarks
+    } for submission in submissions]
+
+    return jsonify(submissions_data), 200
+
+    #Admin
+
+    # Admin model
+class Admin(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    username = db.Column(db.String(100), unique=True, nullable=False)
+    password = db.Column(db.String(100), nullable=False)
+
+# Role model
+class Role(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(100), unique=True, nullable=False)
+
+# Instructor model
+class Instructor(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    full_name = db.Column(db.String(100), nullable=False)
+    email = db.Column(db.String(100), unique=True, nullable=False)
+    course = db.Column(db.String(100), nullable=False)
+    phone = db.Column(db.String(20), nullable=False)
+    password = db.Column(db.String(100), nullable=False)
+
+# Create initial admin
+@app.route('/create-admin', methods=['POST'])
+def create_admin():
+    data = request.get_json()
+    username = data.get('username')
+    password = data.get('password')
+
+    if not username or not password:
+        return jsonify({'error': 'Username and password are required'}), 400
+
+    if Admin.query.filter_by(username=username).first():
+        return jsonify({'error': 'Admin already exists'}), 400
+
+    admin = Admin(username=username, password=password)
+    db.session.add(admin)
+    db.session.commit()
+
+    return jsonify({'message': 'Admin created successfully'}), 201
+
+# Admin login
 @app.route('/admin/login', methods=['POST'])
 def admin_login():
     data = request.get_json()
     username = data.get('username')
     password = data.get('password')
+
+    if not username or not password:
+        return jsonify({'error': 'Username and password are required'}), 400
 
     admin = Admin.query.filter_by(username=username).first()
 
@@ -873,11 +1095,30 @@ def admin_login():
 
     return jsonify({'token': token}), 200
 
+# Admin middleware
+def admin_required(f):
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        token = request.headers.get('Authorization')
+        if not token:
+            return jsonify({'error': 'Admin token is missing'}), 401
 
+        try:
+            data = jwt.decode(token.split()[1], app.config['SECRET_KEY'], algorithms=['HS256'])
+            admin_id = data['admin_id']
+            admin = Admin.query.get(admin_id)
+            if not admin:
+                raise ValueError('Admin not found')
+        except:
+            return jsonify({'error': 'Invalid admin token'}), 401
 
-# create role
+        return f(*args, **kwargs)
 
+    return decorated
+
+# Create role
 @app.route('/admin/roles', methods=['POST'])
+@admin_required
 def create_role():
     data = request.get_json()
     name = data.get('name')
@@ -885,56 +1126,111 @@ def create_role():
     if not name:
         return jsonify({'error': 'Role name is required'}), 400
 
+    if Role.query.filter_by(name=name).first():
+        return jsonify({'error': 'Role already exists'}), 400
+
     role = Role(name=name)
     db.session.add(role)
     db.session.commit()
 
     return jsonify({'message': 'Role created successfully'}), 201
 
-#Get all roles
-@app.route('/admin/roles', methods=['GET'])
-def get_roles():
-    roles = Role.query.all()
-    roles_data = [{'id': role.id, 'name': role.name} for role in roles]
-    return jsonify(roles_data), 200
+# Delete role
+@app.route('/admin/roles/<int:role_id>', methods=['DELETE'])
+@admin_required
+def delete_role(role_id):
+    role = Role.query.get(role_id)
+    if not role:
+        return jsonify({'error': 'Role not found'}), 404
 
+    db.session.delete(role)
+    db.session.commit()
 
-# create instructor
+    return jsonify({'message': 'Role deleted successfully'}), 200
 
+# Create instructor
 @app.route('/admin/instructors', methods=['POST'])
+@admin_required
 def create_instructor():
     data = request.get_json()
-    name = data.get('name')
-    course = data.get('course')
+    full_name = data.get('full_name')
     email = data.get('email')
-    phone_number = data.get('phone_number')
+    course = data.get('course')
+    phone = data.get('phone')
+    password = data.get('password')
 
-    if not name or not course or not email:
-        return jsonify({'error': 'Name, course, and email are required'}), 400
+    if not full_name or not email or not course or not phone or not password:
+        return jsonify({'error': 'All fields are required'}), 400
 
-    instructor = Instructor(name=name, course=course, email=email, phone_number=phone_number)
+    if Instructor.query.filter_by(email=email).first():
+        return jsonify({'error': 'Instructor with this email already exists'}), 400
+
+    instructor = Instructor(full_name=full_name, email=email, course=course, phone=phone, password=password)
     db.session.add(instructor)
     db.session.commit()
 
     return jsonify({'message': 'Instructor created successfully'}), 201
 
-
-#get all instructor
-
+# Get all instructors
 @app.route('/admin/instructors', methods=['GET'])
+@admin_required
 def get_instructors():
     instructors = Instructor.query.all()
-    instructors_data = [{'id': instructor.id, 'name': instructor.name, 'course': instructor.course,
-                         'email': instructor.email, 'phone_number': instructor.phone_number} for instructor in instructors]
+    instructors_data = [{
+        'id': instructor.id,
+        'full_name': instructor.full_name,
+        'email': instructor.email,
+        'course': instructor.course,
+        'phone': instructor.phone
+    } for instructor in instructors]
+
     return jsonify(instructors_data), 200
 
+# Delete instructor
+@app.route('/admin/instructors/<int:instructor_id>', methods=['DELETE'])
+@admin_required
+def delete_instructor(instructor_id):
+    instructor = Instructor.query.get(instructor_id)
+    if not instructor:
+        return jsonify({'error': 'Instructor not found'}), 404
 
-#assign role
-    @app.route('/admin/assign_role', methods=['POST'])
-    def assign_role():
-     data = request.get_json()
+    db.session.delete(instructor)
+    db.session.commit()
+
+    return jsonify({'message': 'Instructor deleted successfully'}), 200
+
+# Instructor login
+@app.route('/instructor/login', methods=['POST'])
+def instructor_login():
+    data = request.get_json()
+    email = data.get('email')
+    password = data.get('password')
+
+    if not email or not password:
+        return jsonify({'error': 'Email and password are required'}), 400
+
+    instructor = Instructor.query.filter_by(email=email).first()
+
+    if not instructor or instructor.password != password:
+        return jsonify({'error': 'Invalid credentials'}), 401
+
+    token = jwt.encode({
+        'instructor_id': instructor.id,
+        'exp': datetime.datetime.utcnow() + datetime.timedelta(hours=24)
+    }, app.config['SECRET_KEY'])
+
+    return jsonify({'token': token}), 200
+
+    # Assign role to user
+@app.route('/admin/assign-role', methods=['POST'])
+@admin_required
+def assign_role():
+    data = request.get_json()
     user_id = data.get('user_id')
     role_id = data.get('role_id')
+
+    if not user_id or not role_id:
+        return jsonify({'error': 'User ID and Role ID are required'}), 400
 
     user = User.query.get(user_id)
     if not user:
@@ -944,10 +1240,65 @@ def get_instructors():
     if not role:
         return jsonify({'error': 'Role not found'}), 404
 
+    if role in user.roles:
+        return jsonify({'message': 'User already has this role'}), 200
+
     user.roles.append(role)
     db.session.commit()
 
     return jsonify({'message': 'Role assigned successfully'}), 200
+
+# Remove role from user
+@app.route('/admin/remove-role', methods=['POST'])
+@admin_required
+def remove_role():
+    data = request.get_json()
+    user_id = data.get('user_id')
+    role_id = data.get('role_id')
+
+    if not user_id or not role_id:
+        return jsonify({'error': 'User ID and Role ID are required'}), 400
+
+    user = User.query.get(user_id)
+    if not user:
+        return jsonify({'error': 'User not found'}), 404
+
+    role = Role.query.get(role_id)
+    if not role:
+        return jsonify({'error': 'Role not found'}), 404
+
+    if role not in user.roles:
+        return jsonify({'message': 'User does not have this role'}), 200
+
+    user.roles.remove(role)
+    db.session.commit()
+
+    return jsonify({'message': 'Role removed successfully'}), 200
+
+# Get user roles
+@app.route('/admin/user-roles/<int:user_id>', methods=['GET'])
+@admin_required
+def get_user_roles(user_id):
+    user = User.query.get(user_id)
+    if not user:
+        return jsonify({'error': 'User not found'}), 404
+
+    roles = [{'id': role.id, 'name': role.name} for role in user.roles]
+    return jsonify(roles), 200
+
+# Get all users with their roles
+@app.route('/admin/users-with-roles', methods=['GET'])
+@admin_required
+def get_users_with_roles():
+    users = User.query.all()
+    users_data = [{
+        'id': user.id,
+        'full_name': user.full_name,
+        'email': user.email,
+        'roles': [{'id': role.id, 'name': role.name} for role in user.roles]
+    } for user in users]
+
+    return jsonify(users_data), 200
 
 
 
