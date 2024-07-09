@@ -15,6 +15,8 @@ app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///database.db'
 app.config['SECRET_KEY'] = '8Zn9Ql0gTvRqW3EzDX4uKX0nPjVqRnGp'
 app.config['UPLOAD_FOLDER'] = 'uploads/profile_images'
 app.config['PEER_REVIEW_UPLOAD_FOLDER'] = 'uploads/peer_reviews'
+app.config['JSON_AS_ASCII'] = False
+app.config['JSONIFY_PRETTYPRINT_REGULAR'] = True
 os.makedirs(app.config['PEER_REVIEW_UPLOAD_FOLDER'], exist_ok=True)
 
 
@@ -397,25 +399,40 @@ def register():
 # Login endpoint
 @app.route('/login', methods=['POST'])
 def login():
+    app.logger.info("Login attempt received")
     data = request.get_json()
+    app.logger.info(f"Received data: {data}")
+
+    if not data:
+        app.logger.error("No JSON data received")
+        return jsonify({'error': 'No data provided'}), 400
 
     email = data.get('email')
     password = data.get('password')
 
     if not email or not password:
+        app.logger.error("Email or password missing")
         return jsonify({'error': 'Email and password are required'}), 400
 
-    user = User.query.filter_by(email=email).first()
+    try:
+        user = User.query.filter_by(email=email).first()
+        app.logger.info(f"User found: {user}")
 
-    if not user or user.password != password:
-        return jsonify({'error': 'Invalid credentials'}), 401
+        if not user or user.password != password:
+            app.logger.error("Invalid credentials")
+            return jsonify({'error': 'Invalid credentials'}), 401
 
-    token = jwt.encode({
-        'user_id': user.id,
-        'exp': datetime.datetime.utcnow() + datetime.timedelta(hours=24)
-    }, app.config['SECRET_KEY'])
+        token = jwt.encode({
+            'user_id': user.id,
+            'exp': datetime.datetime.utcnow() + datetime.timedelta(hours=24)
+        }, app.config['SECRET_KEY'])
 
-    return jsonify({'token': token}), 200
+        app.logger.info("Login successful")
+        return jsonify({'token': token}), 200
+
+    except Exception as e:
+        app.logger.error(f"Login error: {str(e)}")
+        return jsonify({'error': 'An error occurred during login'}), 500
 
 # Profile starts here
 @app.route('/profile', methods=['GET', 'PUT'])
