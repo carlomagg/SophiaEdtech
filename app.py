@@ -400,6 +400,7 @@ def register():
 @app.route('/login', methods=['POST'])
 def login():
     app.logger.info("Login attempt received")
+    app.logger.info(f"SECRET_KEY: {app.config['SECRET_KEY']}")
     data = request.get_json()
     app.logger.info(f"Received data: {data}")
 
@@ -423,13 +424,21 @@ def login():
             return jsonify({'error': 'Invalid credentials'}), 401
 
         app.logger.info("Generating token")
-        token = jwt.encode({
+        token_payload = {
             'user_id': user.id,
             'exp': datetime.datetime.utcnow() + datetime.timedelta(hours=24)
-        }, app.config['SECRET_KEY'])
-        app.logger.info("Token generated successfully")
+        }
+        app.logger.info(f"Token payload: {token_payload}")
+        
+        try:
+            token = jwt.encode(token_payload, app.config['SECRET_KEY'], algorithm='HS256')
+            app.logger.info("Token generated successfully")
+        except Exception as e:
+            app.logger.error(f"Error encoding token: {str(e)}")
+            app.logger.error(f"JWT encode error type: {type(e).__name__}")
+            app.logger.error(f"JWT encode error args: {e.args}")
+            return jsonify({'error': 'Error generating authentication token'}), 500
 
-        # If token is bytes, decode it to string
         if isinstance(token, bytes):
             token = token.decode('utf-8')
 
