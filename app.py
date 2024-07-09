@@ -422,16 +422,24 @@ def login():
             app.logger.error("Invalid credentials")
             return jsonify({'error': 'Invalid credentials'}), 401
 
+        app.logger.info("Generating token")
         token = jwt.encode({
             'user_id': user.id,
             'exp': datetime.datetime.utcnow() + datetime.timedelta(hours=24)
         }, app.config['SECRET_KEY'])
+        app.logger.info("Token generated successfully")
+
+        # If token is bytes, decode it to string
+        if isinstance(token, bytes):
+            token = token.decode('utf-8')
 
         app.logger.info("Login successful")
         return jsonify({'token': token}), 200
 
     except Exception as e:
         app.logger.error(f"Login error: {str(e)}")
+        app.logger.error(f"Error type: {type(e).__name__}")
+        app.logger.error(f"Error args: {e.args}")
         return jsonify({'error': 'An error occurred during login'}), 500
 
 # Profile starts here
