@@ -455,7 +455,8 @@ def login():
         app.logger.info(f"Token payload: {token_payload}")
         
         try:
-            token = jwt.encode(token_payload, app.config['SECRET_KEY'], algorithm='HS256')
+            from jwt import encode
+            token = encode(token_payload, app.config['SECRET_KEY'], algorithm='HS256')
             app.logger.info("Token generated successfully")
         except Exception as e:
             app.logger.error(f"Error encoding token: {str(e)}")
