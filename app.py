@@ -4,7 +4,7 @@ from functools import wraps
 import os
 from flask_sqlalchemy import SQLAlchemy
 from flask_admin.contrib.sqla import ModelView
-import jwt
+import jwt 
 import datetime
 from flask_cors import CORS
 
@@ -18,13 +18,24 @@ app.config['PEER_REVIEW_UPLOAD_FOLDER'] = 'uploads/peer_reviews'
 app.config['JSON_AS_ASCII'] = False
 app.config['JSONIFY_PRETTYPRINT_REGULAR'] = True
 os.makedirs(app.config['PEER_REVIEW_UPLOAD_FOLDER'], exist_ok=True)
+UPLOAD_FOLDER = 'uploads/user_posts'
+app.config['USER_POST_UPLOAD_FOLDER'] = UPLOAD_FOLDER
+os.makedirs(app.config['USER_POST_UPLOAD_FOLDER'], exist_ok=True)
 
 
 db = SQLAlchemy(app)
 
 
 
+#follow
+course_followers = db.Table('course_followers',
+    db.Column('user_id', db.Integer, db.ForeignKey('user.id'), primary_key=True),
+    db.Column('course_id', db.Integer, db.ForeignKey('course.id'), primary_key=True)
+)
 
+class Subject(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(100), nullable=False, unique=True)
 
 # User model
 roles_users = db.Table('roles_users',
@@ -46,6 +57,9 @@ class User(db.Model):
     licenses_certifications = db.relationship('LicenseCertification', backref='user')
     enrolled_courses = db.relationship('Course', secondary=lambda: enrollment_table, lazy='subquery', backref=db.backref('enrolled_users', lazy='dynamic'))
     roles = db.relationship('Role', secondary=roles_users, backref=db.backref('users', lazy='dynamic'))
+    posts = db.relationship('UserPost', backref='user', lazy='dynamic')  # New relationship for UserPost
+    followed_courses = db.relationship('Course', secondary='course_followers', backref='followers')
+
 
     def __repr__(self):
         return f'<User {self.email}>'
@@ -1334,7 +1348,214 @@ def get_users_with_roles():
 
     return jsonify(users_data), 200
 
+    #user post
+class UserPost(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    title = db.Column(db.String(200), nullable=False)
+    executive_summary = db.Column(db.Text, nullable=False)
+    document_path = db.Column(db.String(255), nullable=True)
+    subject = db.Column(db.String(100), nullable=False)
+    doi_link = db.Column(db.String(255), nullable=True)
+    video_link = db.Column(db.String(255), nullable=True)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.datetime.utcnow)
 
+    # The relationship is now defined in the User model, so we don't need to repeat it here
+
+  
+
+# Make sure to create a directory for storing uploaded documents
+
+
+@app.route('/user/posts', methods=['POST'])
+def create_user_post():
+    token = request.headers.get('Authorization')
+    if not token:
+        return jsonify({'error': 'Token is missing'}), 401
+
+    try:
+        data = jwt.decode(token.split()[1], app.config['SECRET_KEY'], algorithms=['HS256'])
+        user_id = data['user_id']
+    except:
+        return jsonify({'error': 'Invalid token'}), 401
+
+    title = request.form.get('title')
+    executive_summary = request.form.get('executive_summary')
+    subject = request.form.get('subject')
+    doi_link = request.form.get('doi_link')
+    video_link = request.form.get('video_link')
+
+    if not title or not executive_summary or not subject:
+        return jsonify({'error': 'Title, executive summary, and subject are required'}), 400
+
+    # Check if the subject matches a course title
+    if not Course.query.filter_by(title=subject).first():
+        return jsonify({'error': 'Invalid subject. Must match a course title.'}), 400
+
+    document_path = None
+    if 'document' in request.files:
+        file = request.files['document']
+        if file.filename != '':
+            filename = secure_filename(file.filename)
+            document_path = os.path.join(app.config['USER_POST_UPLOAD_FOLDER'], filename)
+            file.save(document_path)
+
+    post = UserPost(
+        user_id=user_id,
+        title=title,
+        executive_summary=executive_summary,
+        document_path=document_path,
+        subject=subject,
+        doi_link=doi_link,
+        video_link=video_link
+    )
+
+    db.session.add(post)
+    db.session.commit()
+
+    return jsonify({'message': 'Post created successfully', 'post_id': post.id}), 201
+
+@app.route('/user/posts', methods=['GET'])
+def get_user_posts():
+    token = request.headers.get('Authorization')
+    if not token:
+        return jsonify({'error': 'Token is missing'}), 401
+
+    try:
+        data = jwt.decode(token.split()[1], app.config['SECRET_KEY'], algorithms=['HS256'])
+        user_id = data['user_id']
+    except:
+        return jsonify({'error': 'Invalid token'}), 401
+
+    posts = UserPost.query.filter_by(user_id=user_id).order_by(UserPost.created_at.desc()).all()
+
+    posts_data = [{
+        'id': post.id,
+        'title': post.title,
+        'executive_summary': post.executive_summary,
+        'document_path': post.document_path,
+        'subject': post.subject,
+        'doi_link': post.doi_link,
+        'video_link': post.video_link,
+        'created_at': post.created_at
+    } for post in posts]
+
+    return jsonify(posts_data), 200
+
+@app.route('/user/posts/<int:post_id>', methods=['GET'])
+def get_user_post(post_id):
+    post = UserPost.query.get(post_id)
+    if not post:
+        return jsonify({'error': 'Post not found'}), 404
+
+    post_data = {
+        'id': post.id,
+        'title': post.title,
+        'executive_summary': post.executive_summary,
+        'document_path': post.document_path,
+        'subject': post.subject,
+        'doi_link': post.doi_link,
+        'video_link': post.video_link,
+        'created_at': post.created_at,
+        'user': {
+            'id': post.user.id,
+            'full_name': post.user.full_name
+        }
+    }
+
+    return jsonify(post_data), 200
+
+
+#follow
+@app.route('/all_courses', methods=['GET'])
+def get_all_courses():
+    courses = Course.query.all()
+    return jsonify([{'id': c.id, 'title': c.title} for c in courses]), 200
+
+@app.route('/follow_course/<int:course_id>', methods=['POST'])
+def follow_course(course_id):
+    token = request.headers.get('Authorization')
+    if not token:
+        return jsonify({'error': 'Token is missing'}), 401
+
+    try:
+        data = jwt.decode(token.split()[1], app.config['SECRET_KEY'], algorithms=['HS256'])
+        user_id = data['user_id']
+    except:
+        return jsonify({'error': 'Invalid token'}), 401
+
+    user = User.query.get(user_id)
+    course = Course.query.get(course_id)
+
+    if not course:
+        return jsonify({'error': 'Course not found'}), 404
+
+    if course in user.followed_courses:
+        return jsonify({'message': 'Already following this course'}), 200
+
+    user.followed_courses.append(course)
+    db.session.commit()
+
+    return jsonify({'message': 'Course followed successfully'}), 200
+
+@app.route('/unfollow_course/<int:course_id>', methods=['POST'])
+def unfollow_course(course_id):
+    token = request.headers.get('Authorization')
+    if not token:
+        return jsonify({'error': 'Token is missing'}), 401
+
+    try:
+        data = jwt.decode(token.split()[1], app.config['SECRET_KEY'], algorithms=['HS256'])
+        user_id = data['user_id']
+    except:
+        return jsonify({'error': 'Invalid token'}), 401
+
+    user = User.query.get(user_id)
+    course = Course.query.get(course_id)
+
+    if not course:
+        return jsonify({'error': 'Course not found'}), 404
+
+    if course not in user.followed_courses:
+        return jsonify({'message': 'Not following this course'}), 200
+
+    user.followed_courses.remove(course)
+    db.session.commit()
+
+    return jsonify({'message': 'Course unfollowed successfully'}), 200
+
+@app.route('/user/followed_posts', methods=['GET'])
+def get_followed_posts():
+    token = request.headers.get('Authorization')
+    if not token:
+        return jsonify({'error': 'Token is missing'}), 401
+
+    try:
+        data = jwt.decode(token.split()[1], app.config['SECRET_KEY'], algorithms=['HS256'])
+        user_id = data['user_id']
+    except:
+        return jsonify({'error': 'Invalid token'}), 401
+
+    user = User.query.get(user_id)
+    followed_courses = user.followed_courses
+
+    posts = UserPost.query.filter(UserPost.subject.in_([c.title for c in followed_courses])).order_by(UserPost.created_at.desc()).all()
+
+    posts_data = [{
+        'id': post.id,
+        'title': post.title,
+        'executive_summary': post.executive_summary,
+        'subject': post.subject,
+        'doi_link': post.doi_link,
+        'video_link': post.video_link,
+        'created_at': post.created_at,
+        'user': {
+            'id': post.user.id,
+            'full_name': post.user.full_name
+        }
+    } for post in posts]
+
+    return jsonify(posts_data), 200
 
 
 
