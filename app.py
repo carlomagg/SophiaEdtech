@@ -447,6 +447,12 @@ def login():
         try:
             token = jwt.encode(token_payload, app.config['SECRET_KEY'], algorithm='HS256')
             app.logger.info("Token generated successfully")
+        except jwt.ExpiredSignatureError:
+            app.logger.error("Token has expired")
+            return jsonify({'error': 'Token has expired'}), 401
+        except jwt.InvalidTokenError:
+            app.logger.error("Invalid token")
+            return jsonify({'error': 'Invalid token'}), 401
         except Exception as e:
             app.logger.error(f"Error encoding token: {str(e)}")
             app.logger.error(f"JWT encode error type: {type(e).__name__}")
