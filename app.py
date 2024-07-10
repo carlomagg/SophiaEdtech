@@ -59,7 +59,7 @@ class User(db.Model):
     roles = db.relationship('Role', secondary=roles_users, backref=db.backref('users', lazy='dynamic'))
     posts = db.relationship('UserPost', backref='user', lazy='dynamic')  # New relationship for UserPost
     followed_courses = db.relationship('Course', secondary='course_followers', backref='followers')
-
+    notifications = db.relationship('Notification', backref='user', lazy='dynamic')  # New relationship for Notification
 
     def __repr__(self):
         return f'<User {self.email}>'
@@ -106,6 +106,16 @@ class LicenseCertification(db.Model):
     expiration_date = db.Column(db.Date, nullable=True)
     credentials_id = db.Column(db.String(100), nullable=True)
     credential_url = db.Column(db.String(200), nullable=True)
+
+    #Notification model
+    
+class Notification(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    content = db.Column(db.String(500), nullable=False)
+    is_read = db.Column(db.Boolean, default=False)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.datetime.utcnow)
+   
 
     
  
@@ -1560,6 +1570,98 @@ def get_followed_posts():
     } for post in posts]
 
     return jsonify(posts_data), 200
+
+
+    #Notification
+    # Create a notification
+@app.route('/notifications', methods=['POST'])
+def create_notification():
+    token = request.headers.get('Authorization')
+    if not token:
+        return jsonify({'error': 'Token is missing'}), 401
+
+    try:
+        data = jwt.decode(token.split()[1], app.config['SECRET_KEY'], algorithms=['HS256'])
+        user_id = data['user_id']
+    except:
+        return jsonify({'error': 'Invalid token'}), 401
+
+    content = request.json.get('content')
+    if not content:
+        return jsonify({'error': 'Notification content is required'}), 400
+
+    notification = Notification(user_id=user_id, content=content)
+    db.session.add(notification)
+    db.session.commit()
+
+    return jsonify({'message': 'Notification created successfully', 'id': notification.id}), 201
+
+# Get all notifications for a user
+@app.route('/notifications', methods=['GET'])
+def get_notifications():
+    token = request.headers.get('Authorization')
+    if not token:
+        return jsonify({'error': 'Token is missing'}), 401
+
+    try:
+        data = jwt.decode(token.split()[1], app.config['SECRET_KEY'], algorithms=['HS256'])
+        user_id = data['user_id']
+    except:
+        return jsonify({'error': 'Invalid token'}), 401
+
+    notifications = Notification.query.filter_by(user_id=user_id).order_by(Notification.created_at.desc()).all()
+    notifications_data = [{
+        'id': notif.id,
+        'content': notif.content,
+        'is_read': notif.is_read,
+        'created_at': notif.created_at
+    } for notif in notifications]
+
+    return jsonify(notifications_data), 200
+
+# Mark a notification as read
+@app.route('/notifications/<int:notification_id>/read', methods=['PUT'])
+def mark_notification_as_read(notification_id):
+    token = request.headers.get('Authorization')
+    if not token:
+        return jsonify({'error': 'Token is missing'}), 401
+
+    try:
+        data = jwt.decode(token.split()[1], app.config['SECRET_KEY'], algorithms=['HS256'])
+        user_id = data['user_id']
+    except:
+        return jsonify({'error': 'Invalid token'}), 401
+
+    notification = Notification.query.filter_by(id=notification_id, user_id=user_id).first()
+    if not notification:
+        return jsonify({'error': 'Notification not found'}), 404
+
+    notification.is_read = True
+    db.session.commit()
+
+    return jsonify({'message': 'Notification marked as read'}), 200
+
+# Delete a notification
+@app.route('/notifications/<int:notification_id>', methods=['DELETE'])
+def delete_notification(notification_id):
+    token = request.headers.get('Authorization')
+    if not token:
+        return jsonify({'error': 'Token is missing'}), 401
+
+    try:
+        data = jwt.decode(token.split()[1], app.config['SECRET_KEY'], algorithms=['HS256'])
+        user_id = data['user_id']
+    except:
+        return jsonify({'error': 'Invalid token'}), 401
+
+    notification = Notification.query.filter_by(id=notification_id, user_id=user_id).first()
+    if not notification:
+        return jsonify({'error': 'Notification not found'}), 404
+
+    db.session.delete(notification)
+    db.session.commit()
+
+    return jsonify({'message': 'Notification deleted successfully'}), 200
 
 
 
