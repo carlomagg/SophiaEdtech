@@ -1467,8 +1467,12 @@ def get_user_post(post_id):
 
 
 #follow
-@app.route('/courses', methods=['GET'])
-def get_courses():
+# This is the original get_courses function
+
+
+# This is the renamed function for the follow feature
+@app.route('/courses_for_follow', methods=['GET'])
+def get_courses_for_follow():
     courses = Course.query.all()
     return jsonify([{'id': c.id, 'title': c.title} for c in courses]), 200
 
