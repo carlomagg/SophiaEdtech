@@ -4,7 +4,7 @@ from functools import wraps
 import os
 from flask_sqlalchemy import SQLAlchemy
 from flask_admin.contrib.sqla import ModelView
-from jwt import encode, decode
+from jwt import encode 
 import datetime
 from flask_cors import CORS
 
