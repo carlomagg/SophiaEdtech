@@ -4,7 +4,7 @@ from functools import wraps
 import os
 from flask_sqlalchemy import SQLAlchemy
 from flask_admin.contrib.sqla import ModelView
-from jwt import encode 
+import jwt 
 import datetime
 from flask_cors import CORS
 
@@ -445,7 +445,7 @@ def login():
         app.logger.info(f"Token payload: {token_payload}")
         
         try:
-            token = encode(token_payload, app.config['SECRET_KEY'], algorithm='HS256')
+            token = jwt.encode(token_payload, app.config['SECRET_KEY'], algorithm='HS256')
             app.logger.info("Token generated successfully")
         except Exception as e:
             app.logger.error(f"Error encoding token: {str(e)}")
@@ -1467,8 +1467,8 @@ def get_user_post(post_id):
 
 
 #follow
-@app.route('/all_courses', methods=['GET'])
-def get_all_courses():
+@app.route('/courses', methods=['GET'])
+def get_courses():
     courses = Course.query.all()
     return jsonify([{'id': c.id, 'title': c.title} for c in courses]), 200
 
