@@ -4,7 +4,7 @@ from functools import wraps
 import os
 from flask_sqlalchemy import SQLAlchemy
 from flask_admin.contrib.sqla import ModelView
-import jwt 
+from jwt import encode, decode
 import datetime
 from flask_cors import CORS
 
@@ -445,14 +445,8 @@ def login():
         app.logger.info(f"Token payload: {token_payload}")
         
         try:
-            token = jwt.encode(token_payload, app.config['SECRET_KEY'], algorithm='HS256')
+            token = encode(token_payload, app.config['SECRET_KEY'], algorithm='HS256')
             app.logger.info("Token generated successfully")
-        except jwt.ExpiredSignatureError:
-            app.logger.error("Token has expired")
-            return jsonify({'error': 'Token has expired'}), 401
-        except jwt.InvalidTokenError:
-            app.logger.error("Invalid token")
-            return jsonify({'error': 'Invalid token'}), 401
         except Exception as e:
             app.logger.error(f"Error encoding token: {str(e)}")
             app.logger.error(f"JWT encode error type: {type(e).__name__}")
